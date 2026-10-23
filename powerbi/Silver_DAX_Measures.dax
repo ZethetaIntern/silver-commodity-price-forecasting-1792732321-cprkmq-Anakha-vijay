@@ -1,0 +1,52 @@
+-- Assumed tables: SilverDaily[Date, Close, Volume, VWAP, Log_Returns, Returns_Pct, Dollar_Change]
+-- Create a proper Date table and relationships before using time-intelligence measures.
+Latest Silver Close =
+VAR d = MAX(SilverDaily[Date])
+RETURN CALCULATE(MAX(SilverDaily[Close]), SilverDaily[Date] = d)
+
+Silver Daily Return % =
+DIVIDE([Latest Silver Close] - CALCULATE([Latest Silver Close], DATEADD('Date'[Date], -1, DAY)), CALCULATE([Latest Silver Close], DATEADD('Date'[Date], -1, DAY)))
+
+Silver VWAP =
+DIVIDE(SUMX(SilverDaily, SilverDaily[VWAP] * SilverDaily[Volume]), SUM(SilverDaily[Volume]))
+
+Rolling Volatility 20D Annualised =
+VAR CurrentDate = MAX('Date'[Date])
+VAR WindowDates = DATESINPERIOD('Date'[Date], CurrentDate, -20, DAY)
+VAR DailyStd = CALCULATE(STDEV.P(SilverDaily[Log_Returns]), WindowDates)
+RETURN DailyStd * SQRT(252)
+
+Rolling High 252D =
+CALCULATE(MAX(SilverDaily[Close]), DATESINPERIOD('Date'[Date], MAX('Date'[Date]), -252, DAY))
+
+Rolling Low 252D =
+CALCULATE(MIN(SilverDaily[Close]), DATESINPERIOD('Date'[Date], MAX('Date'[Date]), -252, DAY))
+
+Drawdown % =
+VAR CurrentClose = [Latest Silver Close]
+VAR PeakClose = [Rolling High 252D]
+RETURN DIVIDE(CurrentClose - PeakClose, PeakClose)
+
+Portfolio Market Value = SUMX(PortfolioPositions, PortfolioPositions[Quantity] * [Latest Silver Close])
+
+Portfolio Unrealised PnL =
+SUMX(PortfolioPositions, PortfolioPositions[Quantity] * ([Latest Silver Close] - PortfolioPositions[AverageCost]))
+
+Portfolio Return % = DIVIDE([Portfolio Unrealised PnL], SUMX(PortfolioPositions, PortfolioPositions[Quantity] * PortfolioPositions[AverageCost]))
+
+RSI 14 =
+VAR CurrentDate = MAX('Date'[Date])
+VAR RecentDates = TOPN(14, FILTER(ALL('Date'[Date]), 'Date'[Date] <= CurrentDate), 'Date'[Date], DESC)
+VAR AvgGain = AVERAGEX(FILTER(RecentDates, CALCULATE(MAX(SilverDaily[Dollar_Change])) > 0), CALCULATE(MAX(SilverDaily[Dollar_Change])))
+VAR AvgLoss = AVERAGEX(FILTER(RecentDates, CALCULATE(MAX(SilverDaily[Dollar_Change])) < 0), ABS(CALCULATE(MAX(SilverDaily[Dollar_Change]))))
+VAR RS = DIVIDE(AvgGain, AvgLoss)
+RETURN IF(AvgLoss = 0, 100, 100 - DIVIDE(100, 1 + RS))
+
+Forecast Direction Signal =
+VAR ForecastPrice = [Selected Forecast Price]
+VAR CurrentPrice = [Latest Silver Close]
+VAR ChangePct = DIVIDE(ForecastPrice - CurrentPrice, CurrentPrice)
+RETURN SWITCH(TRUE(), ISBLANK(ForecastPrice), "No forecast", ChangePct >= 0.02, "Bullish watch", ChangePct <= -0.02, "Bearish watch", "Neutral")
+
+-- [Selected Forecast Price] should be defined from a forecast table related by Date and Model.
+-- Signals are research flags, not automatic trading instructions.
